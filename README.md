@@ -28,8 +28,8 @@ Photos you add stay in your browser for the current visit only. Nothing is uploa
 You need [Node.js](https://nodejs.org) 20.19+ or 22.12+.
 
 ```bash
-git clone https://github.com/crownzdesigns-gif/hang-favorite-pics.git
-cd hang-favorite-pics
+git clone https://github.com/crownzdesigns-gif/photo-ledge.git
+cd photo-ledge
 npm install
 npm run dev
 ```
