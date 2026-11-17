@@ -1,0 +1,77 @@
+/* Animated title — handwriting-style reveal + hover wave.
+   Self-contained so it composes with the base `.title` rule in App.css. */
+
+.title--animated {
+  /* the masthead container already handles fade; letters carry the motion */
+  animation: none;
+}
+
+.title__ink {
+  display: inline;
+}
+
+.title-word {
+  display: inline-block; /* never break a word across lines */
+  white-space: nowrap;
+}
+
+.title-space {
+  display: inline-block;
+}
+
+.title-letter {
+  display: inline-block;
+  /* entrance: each glyph settles in like it's being placed by hand */
+  animation: titleLetterIn 560ms var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1))
+    backwards;
+  animation-delay: calc(var(--i) * 36ms + 180ms);
+}
+
+.title-letter__inner {
+  display: inline-block;
+  will-change: transform;
+}
+
+/* hover: a gentle wave travels left → right across the glyphs */
+.title--animated:hover .title-letter__inner {
+  animation: titleLetterWave 700ms var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1));
+  animation-delay: calc(var(--i) * 28ms);
+}
+
+@keyframes titleLetterIn {
+  0% {
+    opacity: 0;
+    transform: translateY(0.42em) rotate(-9deg) scale(0.82);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes titleLetterWave {
+  0% {
+    transform: translateY(0);
+  }
+  35% {
+    transform: translateY(-0.2em) rotate(-3deg);
+  }
+  65% {
+    transform: translateY(0.04em) rotate(1.5deg);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .title-letter {
+    animation: none;
+  }
+  .title--animated:hover .title-letter__inner {
+    animation: none;
+  }
+}

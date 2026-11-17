@@ -1,0 +1,840 @@
+.page {
+  max-width: 1484px;
+  margin: 0 auto;
+  padding: 64px 22px 48px;
+}
+
+/* ----- Masthead ------------------------------------------------------- */
+.masthead {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 44px;
+  animation: riseIn 640ms var(--ease-out-expo) both;
+}
+
+.title {
+  font-family: "Caveat", cursive;
+  font-weight: 700;
+  font-size: clamp(38px, 5.2vw, 60px);
+  line-height: 1;
+  margin: 0;
+  color: var(--ink);
+  letter-spacing: 0.5px;
+}
+
+.subtitle {
+  font-family: "DM Sans", sans-serif;
+  font-weight: 400;
+  font-size: clamp(17px, 2vw, 24px);
+  line-height: 1.2;
+  margin: 0;
+  color: var(--muted);
+  /* hold hidden until the title has mostly written itself, then settle in */
+  opacity: 0;
+  animation: subtitleIn 520ms var(--ease-out-expo) 900ms both;
+}
+
+@keyframes subtitleIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* the global reduce rule zeros duration but not delay — show it immediately */
+  .subtitle {
+    opacity: 1;
+    animation-delay: 0ms;
+  }
+}
+
+/* ----- Stage / board -------------------------------------------------- */
+.stage {
+  position: relative;
+  width: 100%;
+  /* one finger pans the page vertically; pinch-zoom is reserved for the JS
+     gesture handler (which resizes the cards instead of zooming the page) */
+  touch-action: pan-y;
+}
+
+.board {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform-origin: top center;
+  /* cards may extend past the edges — never clip them */
+  overflow: visible;
+  touch-action: pan-y;
+}
+
+/* the brown surface + texture stays clipped to the rounded rectangle */
+.board__surface {
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--board-bg);
+  /* a common pinch target — keep native zoom off so the JS handler wins */
+  touch-action: pan-y;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 30px 60px -28px rgba(70, 44, 22, 0.55),
+    0 10px 24px -16px rgba(70, 44, 22, 0.4);
+}
+
+.board__texture {
+  position: absolute;
+  inset: 0;
+  background-image: url("/photos/mosaic.png");
+  background-repeat: repeat;
+  background-size: 355px 288px;
+  background-position: top left;
+  opacity: 0.5;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+/* ----- Spotlight cursor (§5) ------------------------------------------ *
+ * A soft pool of warm light that trails the cursor. Sits above the board
+ * texture but below the cards. Position is driven by the rAF loop. It should
+ * read subconsciously — if you *notice* a light, drop the opacity. */
+.board__spotlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 350px;
+  height: 350px;
+  margin: -175px 0 0 -175px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 220, 0.06) 0%,
+    transparent 70%
+  );
+  filter: blur(40px);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 0;
+  transition: opacity 600ms var(--ease-out-quart);
+  will-change: transform;
+}
+.board__spotlight.is-on {
+  opacity: 1;
+}
+
+/* ----- Cards ---------------------------------------------------------- */
+.card-anchor {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  touch-action: none;
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+  animation: cardIn 600ms var(--ease-out-expo) both;
+  animation-delay: var(--enter-delay, 0ms);
+  /* Position changes (reset / nudge / momentum) are painted by the rAF loop on
+     the GPU transform layers below — NOT by animating left/top. left/top jump
+     instantly; the physics engine carries the motion as translate3d. */
+}
+
+.card-anchor.is-dragging {
+  cursor: grabbing;
+}
+
+/* Pinch-zoom layer: scales the card around its own centre so the polaroids
+   grow/shrink on the board while the brown surface stays a fixed size. The
+   --zoom variable is set once on the board and inherited by every card. */
+.card-zoom {
+  transform: scale(var(--zoom, 1));
+  transform-origin: center;
+  will-change: transform;
+}
+
+/* Continuous physics layer: parallax + release momentum + idle drift.
+   Written every frame by the single rAF loop. Identity transform at rest,
+   so it adds nothing to the original resting design. */
+.card-phys {
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  /* gives the save-confirmation flip (§9) real depth */
+  perspective: 900px;
+}
+
+/* Swing layer: post-release pendulum + reset lift. Pinned at the top edge so
+   the card hangs like a real photo on a board. */
+.card-swing {
+  transform-origin: top center;
+  transform: rotate(0deg);
+  will-change: transform;
+}
+
+.card-rotor {
+  position: relative;
+  transform: rotate(var(--rot, 0deg));
+  transition:
+    transform var(--dur-normal) var(--ease-spring),
+    filter var(--dur-normal) var(--ease-out-quart),
+    opacity var(--dur-slow) var(--ease-out-quart);
+  will-change: transform;
+}
+
+/* hover lift (only when at rest) */
+.card-anchor:not(.is-dragging):not(.is-rotating) .card-rotor:hover {
+  transform: rotate(var(--rot, 0deg)) translateY(-9px) scale(1.035);
+  filter: brightness(1.08) saturate(1.03);
+}
+
+/* ----- Hover focus mode (§6) ----------------------------------------- *
+ * Hovering one card makes the others recede. Pure CSS via :has() — never
+ * touches React state. Disabled while any card is dragged or rotated. */
+.board:not(:has(.card-anchor.is-dragging)):not(:has(.card-anchor.is-rotating)):has(.card-anchor:hover)
+  .card-anchor:not(:hover)
+  .card-rotor {
+  transform: rotate(var(--rot, 0deg)) scale(0.98);
+  opacity: 0.85;
+}
+
+/* pick-up: straighten, lift, grow */
+.card-anchor.is-dragging .card-rotor {
+  transform: rotate(calc(var(--rot, 0deg) * 0.12)) translateY(-3px) scale(1.06);
+  filter: saturate(1.04);
+}
+
+/* save-confirmation flip (§9): a quick forward tilt, content swaps at the peak,
+   then a soft spring back to flat. Driven by a class toggled from React. */
+.card-anchor.is-flipping .card-rotor {
+  animation: cardFlip 700ms var(--ease-out-quart) both;
+  transition: none;
+}
+@keyframes cardFlip {
+  0% {
+    transform: rotate(var(--rot, 0deg)) rotateX(0deg);
+  }
+  43% {
+    transform: rotate(var(--rot, 0deg)) rotateX(8deg) translateY(-2px);
+  }
+  70% {
+    transform: rotate(var(--rot, 0deg)) rotateX(-2.5deg);
+  }
+  100% {
+    transform: rotate(var(--rot, 0deg)) rotateX(0deg);
+  }
+}
+
+/* rotating: follow the pointer instantly, lifted */
+.card-anchor.is-rotating .card-rotor {
+  transform: rotate(var(--rot, 0deg)) scale(1.04);
+  transition: none;
+  filter: saturate(1.04);
+}
+
+/* ----- Rotate handle -------------------------------------------------- */
+.rotate-handle {
+  position: absolute;
+  top: -36px;
+  left: 50%;
+  transform: translateX(-50%) scale(0.8);
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #fff;
+  color: #6b4a2a;
+  box-shadow:
+    0 4px 10px -3px rgba(40, 22, 8, 0.45),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  touch-action: none;
+  transition:
+    opacity var(--dur-fast) var(--ease-out-quart),
+    transform var(--dur-fast) var(--ease-spring),
+    background var(--dur-fast) ease;
+}
+/* a little stem connecting the knob to the card */
+.rotate-handle::after {
+  content: "";
+  position: absolute;
+  top: 28px;
+  left: 50%;
+  width: 2px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  transform: translateX(-50%);
+  border-radius: 2px;
+}
+.card-anchor:hover .rotate-handle,
+.card-anchor:focus-within .rotate-handle,
+.card-anchor.is-rotating .rotate-handle {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) scale(1);
+}
+.rotate-handle:hover {
+  background: #fff7ea;
+  transform: translateX(-50%) scale(1.12);
+}
+.rotate-handle:active,
+.card-anchor.is-rotating .rotate-handle {
+  cursor: grabbing;
+  background: #ffeccb;
+  transform: translateX(-50%) scale(1.06);
+}
+
+.card-anchor:focus-visible {
+  outline: none;
+}
+.card-anchor:focus-visible .polaroid {
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.9),
+    0 0 0 6px rgba(146, 97, 61, 0.9),
+    var(--shadow-rest);
+}
+
+/* ----- Polaroid ------------------------------------------------------- */
+.polaroid {
+  --shadow-rest:
+    0 10px 18px -10px rgba(40, 22, 8, 0.5),
+    0 4px 8px -4px rgba(40, 22, 8, 0.35);
+  --shadow-hover:
+    0 22px 34px -16px rgba(40, 22, 8, 0.55),
+    0 8px 14px -8px rgba(40, 22, 8, 0.4);
+  --shadow-drag:
+    0 40px 60px -22px rgba(30, 16, 6, 0.6),
+    0 16px 26px -12px rgba(30, 16, 6, 0.45);
+
+  width: 206px;
+  border: 4px solid #fff;
+  border-radius: 16px;
+  padding: 7px 7px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  box-shadow: var(--shadow-rest);
+  transition: box-shadow var(--dur-normal) var(--ease-out-quart);
+}
+
+.card-anchor:not(.is-dragging) .polaroid:hover {
+  box-shadow: var(--shadow-hover);
+}
+.card-anchor.is-dragging .polaroid {
+  box-shadow: var(--shadow-drag);
+}
+
+.polaroid__frame {
+  height: 168px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.polaroid__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+
+.polaroid__caption {
+  font-family: "Caveat", cursive;
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 24px;
+  text-align: center;
+  word-break: break-word;
+  margin: 0;
+}
+
+/* ----- Keyframes ------------------------------------------------------ */
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) translateY(-20px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* one-time "edit me" invite wiggle on the first card */
+.polaroid.is-invite {
+  animation: invite 1.7s var(--ease-out-quart) 600ms 2;
+}
+@keyframes invite {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  20% {
+    transform: rotate(-2.4deg);
+  }
+  60% {
+    transform: rotate(2.4deg);
+  }
+}
+
+/* ===================================================================== */
+/* Edit dialog                                                           */
+/* ===================================================================== */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(34, 20, 9, 0.42);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  /* §7: fade the blur in, not an instant snap */
+  animation: overlayIn 350ms var(--ease-out-quart) both;
+}
+.overlay.is-closing {
+  /* §8: ease the blur back out before unmount */
+  animation: overlayOut 250ms ease-in both;
+}
+
+.dialog {
+  width: min(420px, 100%);
+  background: #fffdf7;
+  border-radius: 22px;
+  padding: 22px;
+  box-shadow:
+    0 30px 70px -24px rgba(40, 22, 8, 0.5),
+    0 10px 24px -12px rgba(40, 22, 8, 0.35);
+  /* §7: rises gently into focus — no harsh pop-in */
+  animation: dialogIn 350ms var(--ease-spring) both;
+}
+.dialog.is-closing {
+  animation: dialogOut 250ms ease-in both;
+}
+
+.dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+.dialog__title {
+  font-family: "Caveat", cursive;
+  font-weight: 700;
+  font-size: 30px;
+  line-height: 1;
+  margin: 0;
+  color: #1c1306;
+}
+.dialog__close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.05);
+  color: #5b4a36;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
+}
+.dialog__close:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+.dialog__close:active {
+  transform: scale(0.92);
+}
+
+.field-label {
+  display: block;
+  font-family: "DM Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #8a795f;
+  margin: 0 0 7px;
+}
+
+.text-field {
+  width: 100%;
+  font-family: "DM Sans", sans-serif;
+  font-size: 16px;
+  color: #1c1306;
+  padding: 11px 13px;
+  border: 1.5px solid #e6ddca;
+  border-radius: 12px;
+  background: #fff;
+  margin-bottom: 18px;
+  transition:
+    border-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
+}
+.text-field::placeholder {
+  color: #b6a98e;
+}
+.text-field:focus {
+  outline: none;
+  border-color: #c9a36a;
+  box-shadow: 0 0 0 3px rgba(201, 163, 106, 0.25);
+}
+
+.uploader {
+  position: relative;
+  display: block;
+  height: 168px;
+  border-radius: 14px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px dashed #d8cbb1;
+  background: #f6f1e6;
+  margin-bottom: 18px;
+  transition:
+    border-color var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
+}
+.uploader.is-over {
+  border-color: #c9a36a;
+  transform: scale(1.01);
+}
+.uploader__preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.uploader__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+  color: #fff;
+  font-family: "DM Sans", sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  background: linear-gradient(
+    180deg,
+    rgba(20, 12, 4, 0.15),
+    rgba(20, 12, 4, 0.55)
+  );
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease;
+}
+.uploader:hover .uploader__overlay,
+.uploader:focus-within .uploader__overlay,
+.uploader.is-over .uploader__overlay {
+  opacity: 1;
+}
+.uploader__overlay small {
+  font-weight: 400;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.uploader__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dialog__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 22px;
+}
+.btn {
+  flex: 1;
+  font-family: "DM Sans", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  transition:
+    transform var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease,
+    background var(--dur-fast) ease;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  cursor: not-allowed;
+}
+.btn--ghost {
+  flex: 0 0 auto;
+  background: transparent;
+  color: #6b5b43;
+}
+.btn--ghost:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+}
+.btn--primary {
+  color: #1a1306;
+  box-shadow: 0 6px 14px -6px rgba(40, 22, 8, 0.5);
+}
+.btn--primary:hover:not(:disabled) {
+  box-shadow: 0 10px 20px -8px rgba(40, 22, 8, 0.55);
+  filter: brightness(1.03);
+}
+.btn--primary:disabled {
+  background: #ece6d8 !important;
+  color: #b3a890;
+  box-shadow: none;
+}
+
+/* ----- Rotation control ----------------------------------------------- */
+.rotate-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+.rot-preview {
+  flex: 0 0 auto;
+  width: 60px;
+  height: 60px;
+  display: grid;
+  place-items: center;
+}
+.rot-preview__rotor {
+  transition: transform 90ms linear;
+}
+.rot-preview__card {
+  width: 42px;
+  height: 42px;
+  border: 3px solid #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 9px -4px rgba(40, 22, 8, 0.5);
+}
+.rot-preview__card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.slider {
+  flex: 1;
+  height: 4px;
+  accent-color: #c9a36a;
+  cursor: pointer;
+}
+.rot-readout {
+  flex: 0 0 auto;
+  width: 42px;
+  text-align: right;
+  font-family: "DM Sans", sans-serif;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: #6b5b43;
+}
+.rot-zero {
+  flex: 0 0 auto;
+  font-family: "DM Sans", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b5b43;
+  background: rgba(0, 0, 0, 0.05);
+  border: none;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) ease,
+    transform var(--dur-fast) ease,
+    opacity var(--dur-fast) ease;
+}
+.rot-zero:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.1);
+}
+.rot-zero:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.rot-zero:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ===================================================================== */
+/* Onboarding hint                                                       */
+/* ===================================================================== */
+.hint {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 28px);
+  padding: 14px 14px 14px 18px;
+  border-radius: 16px;
+  background: rgba(28, 19, 6, 0.92);
+  color: #fff7e9;
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: hintIn 460ms var(--ease-spring) 700ms both;
+}
+.hint__pulse {
+  position: relative;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ffd479;
+}
+.hint__pulse::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid #ffd479;
+  animation: pulseRing 1.8s var(--ease-out-quart) infinite;
+}
+.hint__body {
+  min-width: 0;
+}
+.hint__title {
+  font-family: "DM Sans", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 3px;
+}
+.hint__text {
+  font-family: "DM Sans", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0;
+  color: rgba(255, 247, 233, 0.8);
+}
+.hint__text strong {
+  color: #ffe6b8;
+  font-weight: 600;
+}
+.hint__close {
+  flex: 0 0 auto;
+  align-self: stretch;
+  padding: 0 16px;
+  border: none;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-family: "DM Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
+}
+.hint__close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.hint__close:active {
+  transform: scale(0.95);
+}
+
+/* ===================================================================== */
+/* Keyframes                                                             */
+/* ===================================================================== */
+@keyframes overlayIn {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
+  }
+  to {
+    opacity: 1;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+}
+@keyframes overlayOut {
+  to {
+    opacity: 0;
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
+  }
+}
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes dialogOut {
+  to {
+    opacity: 0;
+    transform: translateY(0) scale(0.95);
+  }
+}
+@keyframes hintIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+@keyframes pulseRing {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 40px 14px 32px;
+  }
+  .hint {
+    flex-wrap: wrap;
+    bottom: 14px;
+  }
+  .hint__close {
+    align-self: auto;
+    padding: 9px 14px;
+  }
+}
